@@ -10,6 +10,62 @@ A simple webhook receiver that accepts Y2 platform intelligence reports and disp
 - ✅ Simple web UI to view received reports
 - ✅ Auto-refresh dashboard every 30 seconds
 
+## Webhook Flow
+
+The following sequence diagram shows how Y2 Information Profile webhooks are delivered and processed:
+
+```mermaid
+sequenceDiagram
+    participant Y2 as Y2 Platform
+    participant CF as Cloudflare Worker
+    participant KV as Cloudflare KV
+    participant UI as Web Dashboard
+    participant User as User Browser
+
+    Note over Y2,User: Y2 Information Profile Webhook Delivery
+    
+    Y2->>CF: POST /webhook
+    Note right of Y2: Intelligence Report<br/>+ HMAC Signature<br/>+ Report Metadata
+    
+    CF->>CF: Verify HMAC Signature
+    Note right of CF: X-Y2-Signature header<br/>SHA-256 validation
+    
+    alt Signature Valid
+        CF->>CF: Parse JSON Payload
+        Note right of CF: Extract profile, content,<br/>sources, metadata
+        
+        CF->>KV: Store Report
+        Note right of KV: Key: CURRENT_REPORT<br/>Overwrites previous
+        
+        CF->>Y2: 200 OK Response
+        Note left of CF: {"received": true,<br/>"id": "report_id",<br/>"timestamp": "..."}
+    else Signature Invalid
+        CF->>Y2: 401 Unauthorized
+        Note left of CF: {"error": "Invalid signature"}
+    end
+    
+    Note over User,KV: Real-time Dashboard Updates
+    
+    User->>UI: Load Dashboard (/)
+    UI->>CF: GET /api/events
+    CF->>KV: Check Last Update
+    CF->>UI: Return Timestamp
+    
+    loop Every 10 seconds
+        UI->>CF: GET /api/events
+        CF->>KV: Get Current Report Timestamp
+        CF->>UI: Latest Timestamp
+        
+        alt New Report Available
+            UI->>CF: GET /api/reports
+            CF->>KV: Fetch Current Report
+            CF->>UI: Full Report JSON
+            UI->>User: Update Dashboard
+            Note right of User: Two-panel view:<br/>Formatted + Raw JSON
+        end
+    end
+```
+
 ## Quick Start
 
 ### 1. Install Dependencies
@@ -26,7 +82,7 @@ Create a KV namespace in Cloudflare:
 bunx wrangler kv namespace create REPORTS
 ```
 
-Update `wrangler.toml` with your KV namespace ID from the output above.
+Create or update `wrangler.toml` with your KV namespace ID from the output above.
 
 ### 3. Set Webhook Secret
 
